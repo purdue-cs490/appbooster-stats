@@ -33,9 +33,11 @@ class Responder(object):
         with open(memsw_usage_in_bytes_path, 'r') as memsw_usage_in_bytes_file:
             memsw_usage_in_bytes = long(memsw_usage_in_bytes_file.read())
 
-        resp_obj['memory'] = {
-            'memsw': {
-                'usage_in_bytes': memsw_usage_in_bytes,
+        resp_obj['stats']= {
+            'memory': {
+                'memsw': {
+                    'usage_in_bytes': memsw_usage_in_bytes,
+                },
             },
         }
         return resp_obj
