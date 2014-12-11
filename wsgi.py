@@ -4,9 +4,13 @@ import re
 import cherrypy
 
 CGROUP = '/sys/fs/cgroup'
-CGROUP_MEMORY_SYSTEMD_ROOT = os.path.join(CGROUP, 'memory', 'system.slice')
+CGROUP_MEMORY_ROOT = os.path.join(CGROUP, 'memory')
+CGROUP_CPU_ROOT = os.path.join(CGROUP, 'cpuacct')
+CGROUP_MEMORY_SYSTEMD_ROOT = os.path.join(CGROUP_MEMORY_ROOT, 'system.slice')
+CGROUP_CPU_SYSTEMD_ROOT = os.path.join(CGROUP_CPU_ROOT, 'system.slice')
 DOCKER_SERVICE_REGEX = '^docker-%s.*\.scope$'
 CGROUP_MEMSW_USAGE = 'memory.memsw.usage_in_bytes'
+CGROUP_CPU_STAT = 'cpuacct.stat'
 
 
 class Responder(object):
@@ -15,16 +19,28 @@ class Responder(object):
     def index(self):
         return 'Welcome to AppBooster app stats server!'
 
-    def memory_stats(self, appid, resp_obj):
+    def _parse_cpuacct_stat(self, stat):
+        stats = {}
+        for st in stat.split('\n'):
+            if st:
+                key, value = st.split()
+                stats[key] = int(value)
+
+        return stats
+
+
+    def fill_stats(self, appid, resp_obj):
         docker_service_name_re = re.compile(DOCKER_SERVICE_REGEX % appid, re.IGNORECASE)
         service_names = []
+
+        # Memory stats
         for service in os.listdir(CGROUP_MEMORY_SYSTEMD_ROOT):
             if docker_service_name_re.match(service):
                 service_names.append(service)
 
-        service_names_len = resp_obj['matches'] = len(service_names)
+        service_names_len = len(service_names)
         if service_names_len != 1:
-            resp_obj['error'] = '%d matches found for appid %d' % (service_names_len, appid)
+            resp_obj['error'] = '%d memory matches found for appid %d' % (service_names_len, appid)
             return resp_obj
 
         service_name = service_names[0]
@@ -33,13 +49,39 @@ class Responder(object):
         with open(memsw_usage_in_bytes_path, 'r') as memsw_usage_in_bytes_file:
             memsw_usage_in_bytes = long(memsw_usage_in_bytes_file.read())
 
-        resp_obj['stats']= {
-            'memory': {
-                'memsw': {
-                    'usage_in_bytes': memsw_usage_in_bytes,
-                },
+        resp_obj['stats']['memory'] = {
+            'memsw': {
+                'usage_in_bytes': memsw_usage_in_bytes,
             },
         }
+
+        # Cpu stats
+        del service_names[:]
+        for service in os.listdir(CGROUP_CPU_SYSTEMD_ROOT):
+            if docker_service_name_re.match(service):
+                service_names.append(service)
+
+        service_names_len = len(service_names)
+        if service_names_len != 1:
+            resp_obj['error'] = '%d cpuacct matches found for appid %d' % (service_names_len, appid)
+            return resp_obj
+
+        cpuacct_stat_total_path = os.path.join(CGROUP_CPU_ROOT, CGROUP_CPU_STAT)
+        with open(cpuacct_stat_total_path, 'r') as cpuacct_stat_total_file:
+            cpustat_total = self._parse_cpuacct_stat(cpuacct_stat_total_file.read())
+
+        service_name = service_names[0]
+        service_cpu_root = os.path.join(CGROUP_CPU_SYSTEMD_ROOT, service_name)
+        cpuacct_stat_path = os.path.join(service_cpu_root, CGROUP_CPU_STAT)
+        with open(cpuacct_stat_path, 'r') as cpuacct_stat_file:
+            cpustat = self._parse_cpuacct_stat(cpuacct_stat_file.read())
+
+        resp_obj['stats']['cpu'] = {
+            'cpuacct': {
+                'stat_percent': cpustat['user'] / float(cpustat_total['user']),
+            },
+        }
+
         return resp_obj
 
     @cherrypy.expose
@@ -47,7 +89,6 @@ class Responder(object):
     def stats(self, appid):
         resp_obj = {
             'error': None,
-            'matches': 0,
             'stats': {},
         }
 
@@ -55,7 +96,7 @@ class Responder(object):
             resp_obj['error'] = 'appid parameter needed'
             return resp_obj
 
-        self.memory_stats(appid, resp_obj)
+        self.fill_stats(appid, resp_obj)
 
         return resp_obj
 
