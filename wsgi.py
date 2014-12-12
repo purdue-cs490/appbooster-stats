@@ -1,5 +1,6 @@
 import os
 import re
+import time
 
 import cherrypy
 
@@ -10,7 +11,8 @@ CGROUP_MEMORY_SYSTEMD_ROOT = os.path.join(CGROUP_MEMORY_ROOT, 'system.slice')
 CGROUP_CPU_SYSTEMD_ROOT = os.path.join(CGROUP_CPU_ROOT, 'system.slice')
 DOCKER_SERVICE_REGEX = '^docker-%s.*\.scope$'
 CGROUP_MEMSW_USAGE = 'memory.memsw.usage_in_bytes'
-CGROUP_CPU_STAT = 'cpuacct.stat'
+CGROUP_CPU_STAT = 'cpuacct.usage'
+CGROUP_CPU_MEASURE_INTERVAL = 0.25
 
 
 class Responder(object):
@@ -19,14 +21,19 @@ class Responder(object):
     def index(self):
         return 'Welcome to AppBooster app stats server!'
 
-    def _parse_cpuacct_stat(self, stat):
-        stats = {}
-        for st in stat.split('\n'):
-            if st:
-                key, value = st.split()
-                stats[key] = int(value)
+    #def _parse_cpuacct_stat(self, stat):
+        #stats = {}
+        #for st in stat.split('\n'):
+            #if st:
+                #key, value = st.split()
+                #stats[key] = int(value)
 
-        return stats
+        #return stats
+
+
+    def read_usage(self, path):
+        with open(path, 'rb') as usage:
+            return long(usage.read())
 
 
     def fill_stats(self, appid, resp_obj):
@@ -66,19 +73,18 @@ class Responder(object):
             resp_obj['error'] = '%d cpuacct matches found for appid %d' % (service_names_len, appid)
             return resp_obj
 
-        cpuacct_stat_total_path = os.path.join(CGROUP_CPU_ROOT, CGROUP_CPU_STAT)
-        with open(cpuacct_stat_total_path, 'r') as cpuacct_stat_total_file:
-            cpustat_total = self._parse_cpuacct_stat(cpuacct_stat_total_file.read())
-
         service_name = service_names[0]
         service_cpu_root = os.path.join(CGROUP_CPU_SYSTEMD_ROOT, service_name)
-        cpuacct_stat_path = os.path.join(service_cpu_root, CGROUP_CPU_STAT)
-        with open(cpuacct_stat_path, 'r') as cpuacct_stat_file:
-            cpustat = self._parse_cpuacct_stat(cpuacct_stat_file.read())
+        cpuacct_usage_path = os.path.join(service_cpu_root, CGROUP_CPU_STAT)
+        start_cpu_usage = self.read_usage(cpuacct_usage_path)
+        time.sleep(CGROUP_CPU_MEASURE_INTERVAL)
+        end_cpu_usage = self.read_usage(cpuacct_usage_path)
+
+        usage = (end_cpu_usage - start_cpu_usage) / (10**9 * CGROUP_CPU_MEASURE_INTERVAL)
 
         resp_obj['stats']['cpu'] = {
             'cpuacct': {
-                'stat_percent': cpustat['user'] / float(cpustat_total['user']),
+                'usage_percent': usage,
             },
         }
 
